@@ -1,0 +1,757 @@
+
+
+# ----------------------------------------------------------------------------------------------------------
+#  CloudFormation Template 1 of 1 -
+#
+#   This templates allows newly added Control Tower accounts to be connected automatically to Tigera
+#
+#   This template provisions infrastructure in the AWS Control Tower Management account that allows creation of Tigera
+#   stack instances in Control Tower managed accounts whenever a new Control Tower managed account is added or existing account updated
+
+#  1- Creates a Tigera Stackset in the AWS Control Tower Management Account
+#  2- Provisions a Eventbridge Rule that is triggered based on a Control Tower Lifecycle Event
+#  3- Provisions a Lifecyle Lambda as a target for the Eventbridge Events Rule.
+#    - The Lifecycle Lambda deploys a Tigera stack in the newly added/updated Control Tower managed account
+#
+#   -----------------------------------
+
+Parameters:
+
+  TigeraKubeAdminRoleName:
+    Type: String
+    Default: TigeraKubeAdminRole
+  TigeraStateMachineName:
+    Type: String
+    Default: tigera-eks-connection
+  StateMachineLogRetention:
+    Type: Number
+    Default: 365
+  NodeGroupRolePrefix:
+    Type: String
+    Default: tigera-ng
+  NodeGroupInstanceType:
+    Type: String
+    Default: m5.large
+  NodeGroupSize:
+    Type: Number
+    Default: 1
+  TigeraScriptUrl:
+    Type: String
+  EventFilterTagKey:
+    Type: String
+    Default: Team
+  EventFilterTagValue:
+    Type: String
+    Default: CT
+
+
+Resources:
+
+
+  CaptureControlTowerLifeCycleEvents:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Capture Control Tower LifeCycle Events and Trigger an Action
+      EventPattern:
+        detail:
+          eventName:
+            - CreateManagedAccount
+            - UpdateManagedAccount
+          eventSource:
+            - controltower.amazonaws.com
+        detail-type:
+          - AWS Service Event via CloudTrail
+        source:
+          - aws.controltower
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt "TriggerCustomizationsOnLifeCycleEvent.Arn"
+          Id: IDCaptureControlTowerLifeCycleEvents
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt "TriggerCustomizationsOnLifeCycleEvent.Arn"
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt "CaptureControlTowerLifeCycleEvents.Arn"
+
+  LambdaRoleToCaptureEvents:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition: {}
+      Path: /
+      Policies:
+        - PolicyName: inline-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:CreateStackInstances'
+                Resource: !Join [':',['arn:aws:cloudformation', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'stackset/TigeraCalicoConnnectStackSet:*']]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  TriggerCustomizationsOnLifeCycleEvent:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          import logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          result = {"ResponseMetadata":{"HTTPStatusCode":"400"}}
+
+          def lambda_handler(event, context):
+
+              masterAcct = event['account']
+              eventDetails = event['detail']
+              regionName = eventDetails['awsRegion']
+              eventName = eventDetails['eventName']
+              srvEventDetails = eventDetails['serviceEventDetails']
+              if eventName == 'CreateManagedAccount' or eventName == 'UpdateManagedAccount':
+                  newAccInfo = {}
+                  logger.info('Event Processed Successfully')
+                  if eventName == 'CreateManagedAccount':
+                      newAccInfo = srvEventDetails['createManagedAccountStatus']
+                  if eventName == 'UpdateManagedAccount':
+                      newAccInfo = srvEventDetails['updateManagedAccountStatus']
+                  cmdStatus = newAccInfo['state']
+                  if cmdStatus == 'SUCCEEDED':
+                      '''Successful event received'''
+                      accId = newAccInfo['account']['accountId']
+                      cloudformation = boto3.client('cloudformation')
+                      try:
+                         result = cloudformation.create_stack_instances(StackSetName='TigeraCalicoConnnectStackSet', Accounts=[accId], Regions=[regionName])
+                         logger.info('Stack instance created Successfully')
+                      except Exception as e:
+                         logger.error('Unable to launch Stack instance, REASON: {}'.format(e))
+                  else:
+                      '''Unsuccessful event received'''
+                      logger.info('Unsuccessful Event Received. SKIPPING :{}'.format(event))
+                      return(False)
+              else:
+                  logger.info('Control Tower Event Captured :{}'.format(event))
+      Handler: index.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt "LambdaRoleToCaptureEvents.Arn"
+      Runtime: python3.7
+      Timeout: 60
+  ############### StackSet for AWS monitoring policy ##########################
+  TigeraStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      Description: StackSet for creating IAM roles for Tigera monitoring
+      StackSetName: TigeraCalicoConnnectStackSet
+      PermissionModel: SELF_MANAGED
+      AdministrationRoleARN: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/service-role/AWSControlTowerStackSetRole']]
+      ExecutionRoleName: "AWSControlTowerExecution"
+      Capabilities:
+        - CAPABILITY_NAMED_IAM
+      TemplateBody: |
+        AWSTemplateFormatVersion: 2010-09-09
+        Description: Template to create resources required for tigera solution
+        Parameters:
+          TigeraKubeAdminRoleName:
+            Type: String
+            Default: TigeraKubeAdminRole
+          TigeraStateMachineName:
+            Type: String
+            Default: tigera-eks-connection
+          StateMachineLogRetention:
+            Type: Number
+            Default: 365
+          NodeGroupRolePrefix:
+            Type: String
+            Default: tigera-ng
+          NodeGroupInstanceType:
+            Type: String
+            Default: m5.large
+          NodeGroupSize:
+            Type: Number
+            Default: 1
+          TigeraScriptUrl:
+            Type: String
+          EventFilterTagKey:
+            Type: String
+            Default: Team
+          EventFilterTagValue:
+            Type: String
+            Default: CT
+        Resources:
+          EKSClusterEventRole:
+            Type: 'AWS::IAM::Role'
+            Properties:
+              AssumeRolePolicyDocument:
+                Statement:
+                  - Action: 'sts:AssumeRole'
+                    Effect: Allow
+                    Principal:
+                      Service: events.amazonaws.com
+                Version: 2012-10-17
+              Description: IAM role used by event rule to trigger tigera state machine
+              Policies:
+                - PolicyName: stateMachinePermissionsPolicy
+                  PolicyDocument:
+                    Version: 2012-10-17
+                    Statement:
+                      - Sid: stateMachinePermissions
+                        Effect: Allow
+                        Action:
+                          - 'states:StartExecution'
+                        Resource:
+                          - !GetAtt TigeraStateMachine.Arn
+              RoleName: EKSClusterCreateEventRole
+              Tags:
+                - Key: Name
+                  Value: EKSClusterCreateEventRole
+          TigeraStateMachine:
+            Type: 'AWS::StepFunctions::StateMachine'
+            Properties:
+              DefinitionString: |
+                {
+                  "Comment": "This is state machine to manage tigera connection",
+                  "StartAt": "CreateRole",
+                  "States": {
+                    "AttachAmazonEC2ContainerRegistryReadOnly": {
+                      "Next": "AttachAmazonSSMManagedInstanceCore",
+                      "Parameters": {
+                        "PolicyArn": "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+                        "RoleName.$": "$.NodeGroupRoleName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
+                      "Type": "Task",
+                      "ResultPath": null
+                    },
+                    "AttachAmazonEKSWorkerNodePolicy": {
+                      "Next": "AttachAmazonEC2ContainerRegistryReadOnly",
+                      "Parameters": {
+                        "PolicyArn": "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+                        "RoleName.$": "$.NodeGroupRoleName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
+                      "Type": "Task",
+                      "ResultPath": null
+                    },
+                    "AttachAmazonEKS_CNI_Policy": {
+                      "Next": "PutTigeraRoleAssumePolicy",
+                      "Parameters": {
+                        "PolicyArn": "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+                        "RoleName.$": "$.NodeGroupRoleName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
+                      "Type": "Task",
+                      "ResultPath": null
+                    },
+                    "AttachAmazonSSMManagedInstanceCore": {
+                      "Next": "AttachAmazonEKS_CNI_Policy",
+                      "Parameters": {
+                        "PolicyArn": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                        "RoleName.$": "$.NodeGroupRoleName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
+                      "Type": "Task",
+                      "ResultPath": null
+                    },
+                    "CreateRole": {
+                      "Next": "AttachAmazonEKSWorkerNodePolicy",
+                      "Parameters": {
+                        "AssumeRolePolicyDocument": {
+                          "Statement": [
+                            {
+                              "Action": "sts:AssumeRole",
+                              "Effect": "Allow",
+                              "Principal": {
+                                "Service": "ec2.amazonaws.com"
+                              }
+                            }
+                          ],
+                          "Version": "2012-10-17"
+                        },
+                        "RoleName.$": "$.NodeGroupRoleName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:iam:createRole",
+                      "ResultPath": "$.NodeGroupRoleOutput",
+                      "Type": "Task"
+                    },
+                    "DescribeCluster": {
+                      "Next": "EKSClusterStatus",
+                      "Parameters": {
+                        "Name.$": "$.ClusterName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+                      "ResultPath": "$.ClusterDetails",
+                      "ResultSelector": {
+                        "Status.$": "$.Cluster.Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "DescribeNodegroup": {
+                      "Next": "NodeGroupChoice",
+                      "Parameters": {
+                        "ClusterName.$": "$.ClusterName",
+                        "NodegroupName.$": "$.NodegroupName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:eks:describeNodegroup",
+                      "ResultPath": "$.DescribeNodeGroupOutput",
+                      "Type": "Task"
+                    },
+                    "DescribeUpdatedCluster": {
+                      "Next": "UpdatedClusterStatus",
+                      "Parameters": {
+                        "Name.$": "$.ClusterName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+                      "ResultPath": "$.ClusterDetails",
+                      "ResultSelector": {
+                        "Status.$": "$.Cluster.Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "EKS CreateNodegroup": {
+                      "Next": "NodeGroupWait",
+                      "Parameters": {
+                        "ClusterName.$": "$.ClusterName",
+                        "InstanceTypes.$": "$.NodeGroupInstanceTypes",
+                        "NodeRole.$": "$.NodeGroupRoleOutput.Role.Arn",
+                        "NodegroupName.$": "$.NodegroupName",
+                        "ScalingConfig": {
+                          "DesiredSize.$": "$.NodeGroupSize"
+                        },
+                        "Subnets.$": "$.NodeGroupSubnets"
+                      },
+                      "Resource": "arn:aws:states:::eks:createNodegroup",
+                      "ResultPath": "$.NodeGroupOutput",
+                      "Type": "Task"
+                    },
+                    "EKSClusterStatus": {
+                      "Choices": [
+                        {
+                          "Next": "Wait5Min",
+                          "StringEquals": "ACTIVE",
+                          "Variable": "$.ClusterDetails.Status"
+                        },
+                        {
+                          "Next": "EKSClusterWait",
+                          "Or": [
+                            {
+                              "StringEquals": "PENDING",
+                              "Variable": "$.ClusterDetails.Status"
+                            },
+                            {
+                              "StringEquals": "UPDATING",
+                              "Variable": "$.ClusterDetails.Status"
+                            },
+                            {
+                              "StringEquals": "CREATING",
+                              "Variable": "$.ClusterDetails.Status"
+                            }
+                          ]
+                        }
+                      ],
+                      "Default": "Fail",
+                      "Type": "Choice"
+                    },
+                    "EKSClusterWait": {
+                      "Next": "DescribeCluster",
+                      "Seconds": 60,
+                      "Type": "Wait"
+                    },
+                    "Fail": {
+                      "Type": "Fail"
+                    },
+                    "InstallKubectl": {
+                      "Next": "KubeCtlWait",
+                      "Parameters": {
+                        "DocumentName": "AWS-RunShellScript",
+                        "Parameters": {
+                          "commands": [
+                            "curl -LO \"https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl\"",
+                            "curl -LO \"https://dl.k8s.io/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256\"",
+                            "echo \"$(<kubectl.sha256) kubectl\" | sha256sum --check",
+                            "sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl",
+                            "kubectl version --client"
+                          ]
+                        },
+                        "Targets": [
+                          {
+                            "Key": "tag:eks:nodegroup-name",
+                            "Values.$": "States.Array($.NodegroupName)"
+                          },
+                          {
+                            "Key": "tag:eks:cluster-name",
+                            "Values.$": "States.Array($.ClusterName)"
+                          }
+                        ]
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
+                      "ResultPath": "$.Kubectl",
+                      "ResultSelector": {
+                        "CommandId.$": "$.Command.CommandId",
+                        "Status.$": "$.Command.Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "InstallTigera": {
+                      "Next": "TigeraWait",
+                      "Parameters": {
+                        "DocumentName": "AWS-RunShellScript",
+                        "InstanceIds.$": "States.Array($.Kubectl.InstanceId)",
+                        "Parameters": {
+                          "commands.$": "States.Array('export KUBECONFIG=/tmp/.kube/config',States.Format('aws eks update-kubeconfig --name {} --role {} --region {}', $.ClusterName, $.TigeraKubeAdminRoleArn, $.Region),'kubectl get deployments -A', States.Format('cd /tmp && curl {} | bash', $.TigeraScriptUrl))"
+                        }
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
+                      "ResultPath": "$.TigeraSSM",
+                      "ResultSelector": {
+                        "CommandId.$": "$.Command.CommandId",
+                        "InstanceId.$": "$.Command.InstanceIds[0]",
+                        "Status.$": "$.Command.Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "KubeCtlChoice": {
+                      "Choices": [
+                        {
+                          "Next": "KubeCtlWait",
+                          "StringEquals": "Pending",
+                          "Variable": "$.Kubectl.Status"
+                        },
+                        {
+                          "Next": "KubeCtlWait",
+                          "StringEquals": "InProgress",
+                          "Variable": "$.Kubectl.Status"
+                        },
+                        {
+                          "Next": "KubectlInvocationStatus",
+                          "StringEquals": "Success",
+                          "Variable": "$.Kubectl.Status"
+                        }
+                      ],
+                      "Default": "Fail",
+                      "Type": "Choice"
+                    },
+                    "KubeCtlWait": {
+                      "Next": "KubectlStatus",
+                      "Seconds": 5,
+                      "Type": "Wait"
+                    },
+                    "KubectlInvocationStatus": {
+                      "Next": "InstallTigera",
+                      "Parameters": {
+                        "CommandId.$": "$.Kubectl.CommandId"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:ssm:listCommandInvocations",
+                      "ResultPath": "$.Kubectl",
+                      "ResultSelector": {
+                        "CommandId.$": "$.CommandInvocations[0].CommandId",
+                        "InstanceId.$": "$.CommandInvocations[0].InstanceId",
+                        "Status.$": "$.CommandInvocations[0].Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "KubectlStatus": {
+                      "Next": "KubeCtlChoice",
+                      "Parameters": {
+                        "CommandId.$": "$.Kubectl.CommandId"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:ssm:listCommands",
+                      "ResultPath": "$.Kubectl",
+                      "ResultSelector": {
+                        "CommandId.$": "$.Commands[0].CommandId",
+                        "Status.$": "$.Commands[0].Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "NodeGroupChoice": {
+                      "Choices": [
+                        {
+                          "Next": "NodeGroupWait",
+                          "Or": [
+                            {
+                              "StringEquals": "CREATING",
+                              "Variable": "$.DescribeNodeGroupOutput.Nodegroup.Status"
+                            },
+                            {
+                              "StringEquals": "UPDATING",
+                              "Variable": "$.DescribeNodeGroupOutput.Nodegroup.Status"
+                            }
+                          ]
+                        },
+                        {
+                          "Next": "InstallKubectl",
+                          "StringEquals": "ACTIVE",
+                          "Variable": "$.DescribeNodeGroupOutput.Nodegroup.Status"
+                        }
+                      ],
+                      "Default": "Fail",
+                      "Type": "Choice"
+                    },
+                    "NodeGroupWait": {
+                      "Next": "DescribeNodegroup",
+                      "Seconds": 60,
+                      "Type": "Wait"
+                    },
+                    "PutTigeraRoleAssumePolicy": {
+                      "Next": "DescribeCluster",
+                      "Parameters": {
+                        "PolicyDocument": {
+                          "Statement": [
+                            {
+                              "Action": "sts:AssumeRole",
+                              "Effect": "Allow",
+                              "Resource.$": "$.TigeraKubeAdminRoleArn",
+                              "Sid": "AssumeTigeraAdminRole"
+                            }
+                          ],
+                          "Version": "2012-10-17"
+                        },
+                        "PolicyName": "AssumeKubeAdminRolePolicy",
+                        "RoleName.$": "$.NodeGroupRoleName"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:iam:putRolePolicy",
+                      "Type": "Task",
+                      "ResultPath": null
+                    },
+                    "Success": {
+                      "Type": "Succeed"
+                    },
+                    "TigeraChoice": {
+                      "Choices": [
+                        {
+                          "Next": "TigeraWait",
+                          "StringEquals": "Pending",
+                          "Variable": "$.TigeraSSM.Status"
+                        },
+                        {
+                          "Next": "TigeraWait",
+                          "StringEquals": "InProgress",
+                          "Variable": "$.TigeraSSM.Status"
+                        },
+                        {
+                          "Next": "Success",
+                          "StringEquals": "Success",
+                          "Variable": "$.TigeraSSM.Status"
+                        }
+                      ],
+                      "Default": "Fail",
+                      "Type": "Choice"
+                    },
+                    "TigeraStatus": {
+                      "Next": "TigeraChoice",
+                      "Parameters": {
+                        "CommandId.$": "$.TigeraSSM.CommandId",
+                        "InstanceId.$": "$.TigeraSSM.InstanceId"
+                      },
+                      "Resource": "arn:aws:states:::aws-sdk:ssm:listCommandInvocations",
+                      "ResultPath": "$.TigeraSSM",
+                      "ResultSelector": {
+                        "CommandId.$": "$.CommandInvocations[0].CommandId",
+                        "InstanceId.$": "$.CommandInvocations[0].InstanceId",
+                        "Status.$": "$.CommandInvocations[0].Status"
+                      },
+                      "Type": "Task"
+                    },
+                    "TigeraWait": {
+                      "Next": "TigeraStatus",
+                      "Seconds": 5,
+                      "Type": "Wait"
+                    },
+                    "UpdatedClusterStatus": {
+                      "Choices": [
+                        {
+                          "Next": "EKS CreateNodegroup",
+                          "StringEquals": "ACTIVE",
+                          "Variable": "$.ClusterDetails.Status"
+                        },
+                        {
+                          "Next": "DescribeUpdatedCluster",
+                          "StringEquals": "UPDATING",
+                          "Variable": "$.ClusterDetails.Status"
+                        }
+                      ],
+                      "Default": "Fail",
+                      "Type": "Choice"
+                    },
+                    "Wait5Min": {
+                      "Next": "DescribeUpdatedCluster",
+                      "Seconds": 300,
+                      "Type": "Wait"
+                    }
+                  }
+                }
+              LoggingConfiguration:
+                Destinations:
+                  - CloudWatchLogsLogGroup:
+                      LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+                IncludeExecutionData: false
+                Level: ERROR
+              RoleArn: !GetAtt StateMachineRole.Arn
+              StateMachineName: !Ref TigeraStateMachineName
+              StateMachineType: STANDARD
+              Tags:
+                - Key: Name
+                  Value: !Ref TigeraStateMachineName
+          StateMachineLogGroup:
+            Type: 'AWS::Logs::LogGroup'
+            Properties:
+              LogGroupName: !Sub '/aws/states/${TigeraStateMachineName}'
+              RetentionInDays: !Ref StateMachineLogRetention
+          StateMachineRole:
+            Type: 'AWS::IAM::Role'
+            Properties:
+              AssumeRolePolicyDocument:
+                Statement:
+                  - Action: 'sts:AssumeRole'
+                    Effect: Allow
+                    Principal:
+                      Service: states.amazonaws.com
+                Version: 2012-10-17
+              Policies:
+                - PolicyName: !Sub '${TigeraStateMachineName}-policy'
+                  PolicyDocument:
+                    Version: 2012-10-17
+                    Statement:
+                      - Effect: Allow
+                        Action:
+                          - 'ssm:SendCommand'
+                          - 'ssm:ListCommand*'
+                          - 'eks:DescribeNodegroup'
+                          - 'eks:DescribeCluster'
+                          - 'eks:CreateNodegroup'
+                          - 'ec2:DescribeSubnets'
+                        Resource: '*'
+                      - Sid: NodeGroupRolePass
+                        Effect: Allow
+                        Action: 'iam:PassRole'
+                        Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${NodeGroupRolePrefix}*'
+                        Condition:
+                          StringEquals:
+                            'iam:PassedToService': eks.amazonaws.com
+                      - Sid: NodeGroupIamRole
+                        Effect: Allow
+                        Action:
+                          - 'iam:CreateRole'
+                          - 'iam:AttachRolePolicy'
+                          - 'iam:PutRolePolicy'
+                        Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${NodeGroupRolePrefix}*'
+                      - Sid: IAMReadPermissions
+                        Effect: Allow
+                        Action:
+                          - 'iam:GetRole'
+                          - 'iam:ListAttachedRolePolicies'
+                        Resource: 'arn:aws:iam::056567786302:role/*'
+                      - Sid: CloudWatchLogging
+                        Effect: Allow
+                        Action:
+                          - 'logs:CreateLogDelivery'
+                          - 'logs:GetLogDelivery'
+                          - 'logs:UpdateLogDelivery'
+                          - 'logs:DeleteLogDelivery'
+                          - 'logs:ListLogDeliveries'
+                          - 'logs:PutResourcePolicy'
+                          - 'logs:DescribeResourcePolicies'
+                          - 'logs:DescribeLogGroups'
+                        Resource:
+                          - '*'
+              Description: IAM role for tigera state machine
+              RoleName: !Sub '${TigeraStateMachineName}-stm-role'
+              Tags:
+                - Key: Name
+                  Value: !Sub '${TigeraStateMachineName}-stm-role'
+          TigeraKubeAdminRole:
+            Type: 'AWS::IAM::Role'
+            Properties:
+              AssumeRolePolicyDocument:
+                Statement:
+                  - Action: 'sts:AssumeRole'
+                    Effect: Allow
+                    Principal:
+                      AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+                Version: 2012-10-17
+              Description: IAM role used as admin on Kubernetes cluster by tigera solution
+              RoleName: !Ref TigeraKubeAdminRoleName
+              Tags:
+                - Key: Name
+                  Value: !Ref TigeraKubeAdminRoleName
+          EKSClusterCreateEvent:
+            Type: 'AWS::Events::Rule'
+            Properties:
+              Description: >-
+                Event rule to trigger tigera eks connection state machine on ELS cluster
+                creation
+              EventPattern: !Sub |
+                {
+                  "source": ["aws.eks"],
+                  "detail-type": ["AWS API Call via CloudTrail"],
+                  "detail": {
+                    "eventSource": ["eks.amazonaws.com"],
+                    "eventName": ["CreateCluster"],
+                    "requestParameters": {
+                      "tags": {
+                        "${EventFilterTagKey}": ["${EventFilterTagValue}"]
+                      }
+                    }
+                  }
+                }
+              Name: !Sub '${TigeraStateMachineName}-event'
+              State: ENABLED
+              Targets:
+                - Arn: !GetAtt TigeraStateMachine.Arn
+                  Id: StateMachineInvocation
+                  RoleArn: !GetAtt EKSClusterEventRole.Arn
+                  InputTransformer:
+                    InputPathsMap:
+                      AccountId: $.account
+                      ClusterName: $.detail.requestParameters.name
+                      NodeGroupSubnets: $.detail.requestParameters.resourcesVpcConfig.subnetIds
+                      Region: $.region
+                    InputTemplate: !Sub
+                      - |
+                        {
+                          "ClusterName": <ClusterName>,
+                          "NodeGroupSubnets" : <NodeGroupSubnets>,
+                          "AccountId": <AccountId>,
+                          "Region" : <Region>,
+                          "NodeGroupRoleName": "${NodeGroupRolePrefix}-<ClusterName>-role",
+                          "NodegroupName": "tigera-workloads",
+                          "NodeGroupInstanceTypes": ["${NodeGroupInstanceType}"],
+                          "NodeGroupSize": ${NodeGroupSize},
+                          "TigeraKubeAdminRoleArn":"${TigeraKubeAdminRoleArn}",
+                          "TigeraScriptUrl": "${TigeraScriptUrl}"
+                        }
+                      - TigeraKubeAdminRoleArn: !GetAtt TigeraKubeAdminRole.Arn
+        Outputs:
+          TigeraKubeAdminRoleArn:
+            Description: Kube admin role arn for tigera
+            Value: !GetAtt TigeraKubeAdminRole.Arn
+      Parameters:
+        - ParameterKey: TigeraKubeAdminRoleName
+          ParameterValue: !Ref TigeraKubeAdminRoleName
+        - ParameterKey: TigeraStateMachineName
+          ParameterValue: !Ref TigeraStateMachineName
+        - ParameterKey: StateMachineLogRetention
+          ParameterValue: !Ref StateMachineLogRetention
+        - ParameterKey: NodeGroupRolePrefix
+          ParameterValue: !Ref NodeGroupRolePrefix
+        - ParameterKey: NodeGroupInstanceType
+          ParameterValue: !Ref NodeGroupInstanceType
+        - ParameterKey: NodeGroupSize
+          ParameterValue: !Ref NodeGroupSize
+        - ParameterKey: TigeraScriptUrl
+          ParameterValue: !Ref TigeraScriptUrl
+        - ParameterKey: EventFilterTagKey
+          ParameterValue: !Ref EventFilterTagKey
+        - ParameterKey: EventFilterTagValue
+          ParameterValue: !Ref EventFilterTagValue
