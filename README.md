@@ -1,4 +1,4 @@
-# tigera-controltower-solution
+# calicocloud-controltower-solution
 
 This solution provides an event driven automation to connect an EKS cluster with Calico cloud.
 
@@ -9,7 +9,7 @@ In order to be able to perform operation on kubernetes, required by calicao scri
 This solution create an IAM role which is used to perform operations on kubernetes. Users of this solution would need to have an automated way of getting that IAM role added as `system:masters` in aws-auth configmap.
 
 ## Deployment
-The `ControlTowerCalicocloudStack.yml` will be deployed in Control Tower management account. This will create a stackset in management account. On every new account creation a CloudFormation stack will be deployed in new account via stackset. The CloudFormation stack in individual account(s) will deploy the resources required for tigera automation.
+The `ControlTowerCalicocloudStack.yml` will be deployed in Control Tower management account. This will create a stackset in management account. On every new account creation a CloudFormation stack will be deployed in new account via stackset. The CloudFormation stack in individual account(s) will deploy the resources required for calicocloud connection automation.
 
 #### Create ControlTowerCalicocloudStack
 * In Control Tower management account, go to CloudFormation stacks, select `Create stack` `With new resources (standard)`.
@@ -17,19 +17,19 @@ The `ControlTowerCalicocloudStack.yml` will be deployed in Control Tower managem
 
 ![Create stack](./resources/imgs/1.png)
 
-* on `Specify stack details` screen, provide a name for Stack. Provide install script url to connect EKS clusters to calico cloud under `TigeraScriptUrl` parameter. Update other parameters as desired. Then, select `Next`
+* on `Specify stack details` screen, provide a name for Stack. Provide install script url to connect EKS clusters to calico cloud under `CalicocloudScriptUrl` parameter. Update other parameters as desired. Then, select `Next`
 
 ![Create stack](./resources/imgs/2.png)
 
 * Keep default values and select `Next` on `Configure stack options` screen.
 * On `Review` screen, select checkbox for `Capabilities` and select `Create stack`
-* Once the stack is `CREATE_COMPLETE`, go to CloudFormation StackSets and select `TigeraCalicoConnnectStackSet`
+* Once the stack is `CREATE_COMPLETE`, go to CloudFormation StackSets and select `CalicocloudConnnectStackSet`
 
 ![Create stack](./resources/imgs/3.png)
 
-* Now, if a new account is vended via Control Tower, a stack instance will be created for that account, which will deploy required resources for calico cloud eks connection automation. To add any existing account follow the `Add stacks to StackSet` action of `TigeraCalicoConnnectStackSet`.
+* Now, if a new account is vended via Control Tower, a stack instance will be created for that account, which will deploy required resources for calico cloud eks connection automation. To add any existing account follow the `Add stacks to StackSet` action of `CalicocloudConnnectStackSet`.
 
-## Resources - Tigera automation
+## Resources - Calicocloud connection automation
 
 #### Kubernetes admin IAM role   
 This is the IAM role role that needs to be updated in aws-auth configmap of kubernetes cluster. ARN for this role is available as output of CloudFormation template.
@@ -39,13 +39,13 @@ An event rule is created to capture EKS CreateCluster event. This rule then trig
 This state machine will orchestrate the automation of connecting eks cluster to calico cloud. As part of this automation, a node group is added to EKS cluster as pods will be deployed. Then it uses AWS Systems Manager to run command on eks nodes to run the calico script.
 
 ## CloudFormation Parameters
-* **TigeraKubeAdminRoleName**   
+* **CalicocloudKubeAdminRoleName**   
 Role name for kubernetes admin role that needs to be added in aws-auth configmap.
 
-*  **TigeraScriptUrl**   
-The calico cloud install script url.
+*  **CalicocloudScriptUrl**   
+The calico cloud connection script url.
 
-* **TigeraStateMachineName**   
+* **CalicocloudStateMachineName**   
 State machine name, which orchestrate the automation.
 
 * **StateMachineLogRetention**   

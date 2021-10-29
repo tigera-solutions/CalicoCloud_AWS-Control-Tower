@@ -3,39 +3,39 @@
 # ----------------------------------------------------------------------------------------------------------
 #  CloudFormation Template 1 of 1 -
 #
-#   This templates allows newly added Control Tower accounts to be connected automatically to Tigera
+#   This templates allows newly added Control Tower accounts to be connected automatically to Calicocloud
 #
-#   This template provisions infrastructure in the AWS Control Tower Management account that allows creation of Tigera
+#   This template provisions infrastructure in the AWS Control Tower Management account that allows creation of CalicocloudConnect
 #   stack instances in Control Tower managed accounts whenever a new Control Tower managed account is added or existing account updated
 
-#  1- Creates a Tigera Stackset in the AWS Control Tower Management Account
+#  1- Creates a CalicocloudConnect Stackset in the AWS Control Tower Management Account
 #  2- Provisions a Eventbridge Rule that is triggered based on a Control Tower Lifecycle Event
 #  3- Provisions a Lifecyle Lambda as a target for the Eventbridge Events Rule.
-#    - The Lifecycle Lambda deploys a Tigera stack in the newly added/updated Control Tower managed account
+#    - The Lifecycle Lambda deploys a CalicocloudConnect stack in the newly added/updated Control Tower managed account
 #
 #   -----------------------------------
 
 Parameters:
 
-  TigeraKubeAdminRoleName:
+  CalicocloudKubeAdminRoleName:
     Type: String
-    Default: TigeraKubeAdminRole
-  TigeraStateMachineName:
+    Default: CalicocloudKubeAdminRole
+  CalicocloudStateMachineName:
     Type: String
-    Default: tigera-eks-connection
+    Default: calicocloud-eks-connection
   StateMachineLogRetention:
     Type: Number
     Default: 365
   NodeGroupRolePrefix:
     Type: String
-    Default: tigera-ng
+    Default: calicocloud-ng
   NodeGroupInstanceType:
     Type: String
     Default: m5.large
   NodeGroupSize:
     Type: Number
     Default: 1
-  TigeraScriptUrl:
+  CalicocloudScriptUrl:
     Type: String
   EventFilterTagKey:
     Type: String
@@ -96,7 +96,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - 'cloudformation:CreateStackInstances'
-                Resource: !Join [':',['arn:aws:cloudformation', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'stackset/TigeraCalicoConnnectStackSet:*']]
+                Resource: !Join [':',['arn:aws:cloudformation', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'stackset/CalicocloudConnnectStackSet:*']]
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
@@ -133,7 +133,7 @@ Resources:
                       accId = newAccInfo['account']['accountId']
                       cloudformation = boto3.client('cloudformation')
                       try:
-                         result = cloudformation.create_stack_instances(StackSetName='TigeraCalicoConnnectStackSet', Accounts=[accId], Regions=[regionName])
+                         result = cloudformation.create_stack_instances(StackSetName='CalicocloudConnnectStackSet', Accounts=[accId], Regions=[regionName])
                          logger.info('Stack instance created Successfully')
                       except Exception as e:
                          logger.error('Unable to launch Stack instance, REASON: {}'.format(e))
@@ -149,11 +149,11 @@ Resources:
       Runtime: python3.7
       Timeout: 60
   ############### StackSet for AWS monitoring policy ##########################
-  TigeraStackSet:
+  CalicocloudConnnectStackSet:
     Type: AWS::CloudFormation::StackSet
     Properties:
       Description: StackSet for creating calico cloud connect automation stack
-      StackSetName: TigeraCalicoConnnectStackSet
+      StackSetName: CalicocloudConnnectStackSet
       PermissionModel: SELF_MANAGED
       AdministrationRoleARN: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/service-role/AWSControlTowerStackSetRole']]
       ExecutionRoleName: "AWSControlTowerExecution"
@@ -161,27 +161,27 @@ Resources:
         - CAPABILITY_NAMED_IAM
       TemplateBody: |
         AWSTemplateFormatVersion: 2010-09-09
-        Description: Template to create resources required for tigera solution
+        Description: Template to create resources required for calicocloud solution
         Parameters:
-          TigeraKubeAdminRoleName:
+          CalicocloudKubeAdminRoleName:
             Type: String
-            Default: TigeraKubeAdminRole
-          TigeraStateMachineName:
+            Default: CalicocloudKubeAdminRole
+          CalicocloudStateMachineName:
             Type: String
-            Default: tigera-eks-connection
+            Default: calicocloud-eks-connection
           StateMachineLogRetention:
             Type: Number
             Default: 365
           NodeGroupRolePrefix:
             Type: String
-            Default: tigera-ng
+            Default: calicocloud-ng
           NodeGroupInstanceType:
             Type: String
             Default: m5.large
           NodeGroupSize:
             Type: Number
             Default: 1
-          TigeraScriptUrl:
+          CalicocloudScriptUrl:
             Type: String
           EventFilterTagKey:
             Type: String
@@ -200,7 +200,7 @@ Resources:
                     Principal:
                       Service: events.amazonaws.com
                 Version: 2012-10-17
-              Description: IAM role used by event rule to trigger tigera state machine
+              Description: IAM role used by event rule to trigger calicocloudconnect state machine
               Policies:
                 - PolicyName: stateMachinePermissionsPolicy
                   PolicyDocument:
@@ -211,17 +211,17 @@ Resources:
                         Action:
                           - 'states:StartExecution'
                         Resource:
-                          - !GetAtt TigeraStateMachine.Arn
+                          - !GetAtt CalicocloudStateMachine.Arn
               RoleName: EKSClusterCreateEventRole
               Tags:
                 - Key: Name
                   Value: EKSClusterCreateEventRole
-          TigeraStateMachine:
+          CalicocloudStateMachine:
             Type: 'AWS::StepFunctions::StateMachine'
             Properties:
               DefinitionString: |
                 {
-                  "Comment": "This is state machine to manage tigera connection",
+                  "Comment": "This is state machine to manage calicocloud connection",
                   "StartAt": "CreateRole",
                   "States": {
                     "AttachAmazonEC2ContainerRegistryReadOnly": {
@@ -245,7 +245,7 @@ Resources:
                       "ResultPath": null
                     },
                     "AttachAmazonEKS_CNI_Policy": {
-                      "Next": "PutTigeraRoleAssumePolicy",
+                      "Next": "PutRoleAssumePolicy",
                       "Parameters": {
                         "PolicyArn": "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
                         "RoleName.$": "$.NodeGroupRoleName"
@@ -403,17 +403,17 @@ Resources:
                       },
                       "Type": "Task"
                     },
-                    "InstallTigera": {
-                      "Next": "TigeraWait",
+                    "ConnectCalicocloud": {
+                      "Next": "ConnectCalicocloudWait",
                       "Parameters": {
                         "DocumentName": "AWS-RunShellScript",
                         "InstanceIds.$": "States.Array($.Kubectl.InstanceId)",
                         "Parameters": {
-                          "commands.$": "States.Array('export KUBECONFIG=/tmp/.kube/config',States.Format('aws eks update-kubeconfig --name {} --role {} --region {}', $.ClusterName, $.TigeraKubeAdminRoleArn, $.Region),'kubectl get deployments -A', States.Format('cd /tmp && curl {} | bash', $.TigeraScriptUrl))"
+                          "commands.$": "States.Array('export KUBECONFIG=/tmp/.kube/config',States.Format('aws eks update-kubeconfig --name {} --role {} --region {}', $.ClusterName, $.CalicocloudKubeAdminRoleArn, $.Region),'kubectl get deployments -A', States.Format('cd /tmp && curl {} | bash', $.CalicocloudScriptUrl))"
                         }
                       },
                       "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
-                      "ResultPath": "$.TigeraSSM",
+                      "ResultPath": "$.ConnectCalicocloudSSM",
                       "ResultSelector": {
                         "CommandId.$": "$.Command.CommandId",
                         "InstanceId.$": "$.Command.InstanceIds[0]",
@@ -448,7 +448,7 @@ Resources:
                       "Type": "Wait"
                     },
                     "KubectlInvocationStatus": {
-                      "Next": "InstallTigera",
+                      "Next": "ConnectCalicocloud",
                       "Parameters": {
                         "CommandId.$": "$.Kubectl.CommandId"
                       },
@@ -503,7 +503,7 @@ Resources:
                       "Seconds": 60,
                       "Type": "Wait"
                     },
-                    "PutTigeraRoleAssumePolicy": {
+                    "PutRoleAssumePolicy": {
                       "Next": "DescribeCluster",
                       "Parameters": {
                         "PolicyDocument": {
@@ -511,8 +511,8 @@ Resources:
                             {
                               "Action": "sts:AssumeRole",
                               "Effect": "Allow",
-                              "Resource.$": "$.TigeraKubeAdminRoleArn",
-                              "Sid": "AssumeTigeraAdminRole"
+                              "Resource.$": "$.CalicocloudKubeAdminRoleArn",
+                              "Sid": "AssumeKubeAdminRole"
                             }
                           ],
                           "Version": "2012-10-17"
@@ -527,35 +527,35 @@ Resources:
                     "Success": {
                       "Type": "Succeed"
                     },
-                    "TigeraChoice": {
+                    "ConnectCalicocloudChoice": {
                       "Choices": [
                         {
-                          "Next": "TigeraWait",
+                          "Next": "ConnectCalicocloudWait",
                           "StringEquals": "Pending",
-                          "Variable": "$.TigeraSSM.Status"
+                          "Variable": "$.ConnectCalicocloudSSM.Status"
                         },
                         {
-                          "Next": "TigeraWait",
+                          "Next": "ConnectCalicocloudWait",
                           "StringEquals": "InProgress",
-                          "Variable": "$.TigeraSSM.Status"
+                          "Variable": "$.ConnectCalicocloudSSM.Status"
                         },
                         {
                           "Next": "Success",
                           "StringEquals": "Success",
-                          "Variable": "$.TigeraSSM.Status"
+                          "Variable": "$.ConnectCalicocloudSSM.Status"
                         }
                       ],
                       "Default": "Fail",
                       "Type": "Choice"
                     },
-                    "TigeraStatus": {
-                      "Next": "TigeraChoice",
+                    "ConnectCalicocloudStatus": {
+                      "Next": "ConnectCalicocloudChoice",
                       "Parameters": {
-                        "CommandId.$": "$.TigeraSSM.CommandId",
-                        "InstanceId.$": "$.TigeraSSM.InstanceId"
+                        "CommandId.$": "$.ConnectCalicocloudSSM.CommandId",
+                        "InstanceId.$": "$.ConnectCalicocloudSSM.InstanceId"
                       },
                       "Resource": "arn:aws:states:::aws-sdk:ssm:listCommandInvocations",
-                      "ResultPath": "$.TigeraSSM",
+                      "ResultPath": "$.ConnectCalicocloudSSM",
                       "ResultSelector": {
                         "CommandId.$": "$.CommandInvocations[0].CommandId",
                         "InstanceId.$": "$.CommandInvocations[0].InstanceId",
@@ -563,8 +563,8 @@ Resources:
                       },
                       "Type": "Task"
                     },
-                    "TigeraWait": {
-                      "Next": "TigeraStatus",
+                    "ConnectCalicocloudWait": {
+                      "Next": "ConnectCalicocloudStatus",
                       "Seconds": 5,
                       "Type": "Wait"
                     },
@@ -598,15 +598,15 @@ Resources:
                 IncludeExecutionData: false
                 Level: ERROR
               RoleArn: !GetAtt StateMachineRole.Arn
-              StateMachineName: !Ref TigeraStateMachineName
+              StateMachineName: !Ref CalicocloudStateMachineName
               StateMachineType: STANDARD
               Tags:
                 - Key: Name
-                  Value: !Ref TigeraStateMachineName
+                  Value: !Ref CalicocloudStateMachineName
           StateMachineLogGroup:
             Type: 'AWS::Logs::LogGroup'
             Properties:
-              LogGroupName: !Sub '/aws/states/${TigeraStateMachineName}'
+              LogGroupName: !Sub '/aws/states/${CalicocloudStateMachineName}'
               RetentionInDays: !Ref StateMachineLogRetention
           StateMachineRole:
             Type: 'AWS::IAM::Role'
@@ -619,7 +619,7 @@ Resources:
                       Service: states.amazonaws.com
                 Version: 2012-10-17
               Policies:
-                - PolicyName: !Sub '${TigeraStateMachineName}-policy'
+                - PolicyName: !Sub '${CalicocloudStateMachineName}-policy'
                   PolicyDocument:
                     Version: 2012-10-17
                     Statement:
@@ -665,12 +665,12 @@ Resources:
                           - 'logs:DescribeLogGroups'
                         Resource:
                           - '*'
-              Description: IAM role for tigera state machine
-              RoleName: !Sub '${TigeraStateMachineName}-stm-role'
+              Description: IAM role for Calicocloud connect state machine
+              RoleName: !Sub '${CalicocloudStateMachineName}-stm-role'
               Tags:
                 - Key: Name
-                  Value: !Sub '${TigeraStateMachineName}-stm-role'
-          TigeraKubeAdminRole:
+                  Value: !Sub '${CalicocloudStateMachineName}-stm-role'
+          CalicocloudKubeAdminRole:
             Type: 'AWS::IAM::Role'
             Properties:
               AssumeRolePolicyDocument:
@@ -680,16 +680,16 @@ Resources:
                     Principal:
                       AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
                 Version: 2012-10-17
-              Description: IAM role used as admin on Kubernetes cluster by tigera solution
-              RoleName: !Ref TigeraKubeAdminRoleName
+              Description: IAM role used as admin on Kubernetes cluster by Calicocloud connect solution
+              RoleName: !Ref CalicocloudKubeAdminRoleName
               Tags:
                 - Key: Name
-                  Value: !Ref TigeraKubeAdminRoleName
+                  Value: !Ref CalicocloudKubeAdminRoleName
           EKSClusterCreateEvent:
             Type: 'AWS::Events::Rule'
             Properties:
               Description: >-
-                Event rule to trigger tigera eks connection state machine on ELS cluster
+                Event rule to trigger Calicocloud eks connection state machine on EKS cluster
                 creation
               EventPattern: !Sub |
                 {
@@ -705,10 +705,10 @@ Resources:
                     }
                   }
                 }
-              Name: !Sub '${TigeraStateMachineName}-event'
+              Name: !Sub '${CalicocloudStateMachineName}-event'
               State: ENABLED
               Targets:
-                - Arn: !GetAtt TigeraStateMachine.Arn
+                - Arn: !GetAtt CalicocloudStateMachine.Arn
                   Id: StateMachineInvocation
                   RoleArn: !GetAtt EKSClusterEventRole.Arn
                   InputTransformer:
@@ -725,22 +725,22 @@ Resources:
                           "AccountId": <AccountId>,
                           "Region" : <Region>,
                           "NodeGroupRoleName": "${NodeGroupRolePrefix}-<ClusterName>-role",
-                          "NodegroupName": "tigera-workloads",
+                          "NodegroupName": "calicocloud-workloads",
                           "NodeGroupInstanceTypes": ["${NodeGroupInstanceType}"],
                           "NodeGroupSize": ${NodeGroupSize},
-                          "TigeraKubeAdminRoleArn":"${TigeraKubeAdminRoleArn}",
-                          "TigeraScriptUrl": "${TigeraScriptUrl}"
+                          "CalicocloudKubeAdminRoleArn":"${CalicocloudKubeAdminRoleArn}",
+                          "CalicocloudScriptUrl": "${CalicocloudScriptUrl}"
                         }
-                      - TigeraKubeAdminRoleArn: !GetAtt TigeraKubeAdminRole.Arn
+                      - CalicocloudKubeAdminRoleArn: !GetAtt CalicocloudKubeAdminRole.Arn
         Outputs:
-          TigeraKubeAdminRoleArn:
-            Description: Kube admin role arn for tigera
-            Value: !GetAtt TigeraKubeAdminRole.Arn
+          CalicocloudKubeAdminRoleArn:
+            Description: Kube admin role arn for calicocloud
+            Value: !GetAtt CalicocloudKubeAdminRole.Arn
       Parameters:
-        - ParameterKey: TigeraKubeAdminRoleName
-          ParameterValue: !Ref TigeraKubeAdminRoleName
-        - ParameterKey: TigeraStateMachineName
-          ParameterValue: !Ref TigeraStateMachineName
+        - ParameterKey: CalicocloudKubeAdminRoleName
+          ParameterValue: !Ref CalicocloudKubeAdminRoleName
+        - ParameterKey: CalicocloudStateMachineName
+          ParameterValue: !Ref CalicocloudStateMachineName
         - ParameterKey: StateMachineLogRetention
           ParameterValue: !Ref StateMachineLogRetention
         - ParameterKey: NodeGroupRolePrefix
@@ -749,8 +749,8 @@ Resources:
           ParameterValue: !Ref NodeGroupInstanceType
         - ParameterKey: NodeGroupSize
           ParameterValue: !Ref NodeGroupSize
-        - ParameterKey: TigeraScriptUrl
-          ParameterValue: !Ref TigeraScriptUrl
+        - ParameterKey: CalicocloudScriptUrl
+          ParameterValue: !Ref CalicocloudScriptUrl
         - ParameterKey: EventFilterTagKey
           ParameterValue: !Ref EventFilterTagKey
         - ParameterKey: EventFilterTagValue
