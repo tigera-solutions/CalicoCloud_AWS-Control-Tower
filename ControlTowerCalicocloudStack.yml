@@ -152,7 +152,7 @@ Resources:
   TigeraStackSet:
     Type: AWS::CloudFormation::StackSet
     Properties:
-      Description: StackSet for creating IAM roles for Tigera monitoring
+      Description: StackSet for creating calico cloud connect automation stack
       StackSetName: TigeraCalicoConnnectStackSet
       PermissionModel: SELF_MANAGED
       AdministrationRoleARN: !Join [':', ['arn:aws:iam:', !Ref 'AWS::AccountId', 'role/service-role/AWSControlTowerStackSetRole']]
