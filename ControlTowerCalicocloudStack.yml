@@ -43,11 +43,12 @@ Parameters:
   EventFilterTagValue:
     Type: String
     Default: CT
-
+  NotificationEmailAddress:
+    Type: String
+    Default: ''
+    Description: '(Optional) Email address for notifications'
 
 Resources:
-
-
   CaptureControlTowerLifeCycleEvents:
     Type: AWS::Events::Rule
     Properties:
@@ -189,6 +190,14 @@ Resources:
           EventFilterTagValue:
             Type: String
             Default: CT
+          NotificationEmailAddress:
+            Type: String
+            Default: ''
+        Conditions:
+          CreateSNSSubscription: !Not
+            - !Equals
+              - !Ref NotificationEmailAddress
+              - ''
         Resources:
           EKSClusterEventRole:
             Type: 'AWS::IAM::Role'
@@ -232,6 +241,15 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
                       "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ],
                       "ResultPath": null
                     },
                     "AttachAmazonEKSWorkerNodePolicy": {
@@ -242,6 +260,15 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
                       "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ],
                       "ResultPath": null
                     },
                     "AttachAmazonEKS_CNI_Policy": {
@@ -252,6 +279,15 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
                       "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ],
                       "ResultPath": null
                     },
                     "AttachAmazonSSMManagedInstanceCore": {
@@ -262,6 +298,15 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:iam:attachRolePolicy",
                       "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ],
                       "ResultPath": null
                     },
                     "CreateRole": {
@@ -283,7 +328,16 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:iam:createRole",
                       "ResultPath": "$.NodeGroupRoleOutput",
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "DescribeCluster": {
                       "Next": "EKSClusterStatus",
@@ -295,7 +349,16 @@ Resources:
                       "ResultSelector": {
                         "Status.$": "$.Cluster.Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "DescribeNodegroup": {
                       "Next": "NodeGroupChoice",
@@ -305,7 +368,16 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:eks:describeNodegroup",
                       "ResultPath": "$.DescribeNodeGroupOutput",
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "DescribeUpdatedCluster": {
                       "Next": "UpdatedClusterStatus",
@@ -317,7 +389,16 @@ Resources:
                       "ResultSelector": {
                         "Status.$": "$.Cluster.Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "EKS CreateNodegroup": {
                       "Next": "NodeGroupWait",
@@ -333,7 +414,16 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::eks:createNodegroup",
                       "ResultPath": "$.NodeGroupOutput",
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "EKSClusterStatus": {
                       "Choices": [
@@ -360,8 +450,16 @@ Resources:
                           ]
                         }
                       ],
-                      "Default": "Fail",
+                      "Default": "EKSClusterPass",
                       "Type": "Choice"
+                    },
+                    "EKSClusterPass": {
+                      "Type": "Pass",
+                      "Next": "SNS Publish Fail",
+                      "ResultPath": "$.Error",
+                      "Parameters": {
+                        "Cause.$": "States.Format('EKS cluster {} creation failed', $.ClusterName)"
+                      }
                     },
                     "EKSClusterWait": {
                       "Next": "DescribeCluster",
@@ -401,7 +499,16 @@ Resources:
                         "CommandId.$": "$.Command.CommandId",
                         "Status.$": "$.Command.Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "ConnectCalicocloud": {
                       "Next": "ConnectCalicocloudWait",
@@ -413,13 +520,22 @@ Resources:
                         }
                       },
                       "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
-                      "ResultPath": "$.ConnectCalicocloudSSM",
+                      "ResultPath": "$.ConnectCalicocloud",
                       "ResultSelector": {
                         "CommandId.$": "$.Command.CommandId",
                         "InstanceId.$": "$.Command.InstanceIds[0]",
                         "Status.$": "$.Command.Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "KubeCtlChoice": {
                       "Choices": [
@@ -439,8 +555,16 @@ Resources:
                           "Variable": "$.Kubectl.Status"
                         }
                       ],
-                      "Default": "Fail",
+                      "Default": "KubeCtlPass",
                       "Type": "Choice"
+                    },
+                    "KubeCtlPass": {
+                      "Type": "Pass",
+                      "Next": "SNS Publish Fail",
+                      "Parameters": {
+                        "Cause.$": "States.Format('SSM command to install Kubectl failed. SSM commandId {}', $.Kubectl.CommandId)"
+                      },
+                      "ResultPath": "$.Error"
                     },
                     "KubeCtlWait": {
                       "Next": "KubectlStatus",
@@ -459,7 +583,16 @@ Resources:
                         "InstanceId.$": "$.CommandInvocations[0].InstanceId",
                         "Status.$": "$.CommandInvocations[0].Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "KubectlStatus": {
                       "Next": "KubeCtlChoice",
@@ -472,7 +605,16 @@ Resources:
                         "CommandId.$": "$.Commands[0].CommandId",
                         "Status.$": "$.Commands[0].Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "NodeGroupChoice": {
                       "Choices": [
@@ -495,8 +637,16 @@ Resources:
                           "Variable": "$.DescribeNodeGroupOutput.Nodegroup.Status"
                         }
                       ],
-                      "Default": "Fail",
+                      "Default": "NodeGroupPass",
                       "Type": "Choice"
+                    },
+                    "NodeGroupPass": {
+                      "Type": "Pass",
+                      "Next": "SNS Publish Fail",
+                      "Parameters": {
+                        "Cause.$": "States.Format('{} nodegroup creation failed for EKS cluster {}', $.NodegroupName, $.ClusterName)"
+                      },
+                      "ResultPath": "$.Error"
                     },
                     "NodeGroupWait": {
                       "Next": "DescribeNodegroup",
@@ -522,6 +672,15 @@ Resources:
                       },
                       "Resource": "arn:aws:states:::aws-sdk:iam:putRolePolicy",
                       "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ],
                       "ResultPath": null
                     },
                     "Success": {
@@ -532,36 +691,53 @@ Resources:
                         {
                           "Next": "ConnectCalicocloudWait",
                           "StringEquals": "Pending",
-                          "Variable": "$.ConnectCalicocloudSSM.Status"
+                          "Variable": "$.ConnectCalicocloud.Status"
                         },
                         {
                           "Next": "ConnectCalicocloudWait",
                           "StringEquals": "InProgress",
-                          "Variable": "$.ConnectCalicocloudSSM.Status"
+                          "Variable": "$.ConnectCalicocloud.Status"
                         },
                         {
-                          "Next": "Success",
+                          "Next": "SNS Publish Success",
                           "StringEquals": "Success",
-                          "Variable": "$.ConnectCalicocloudSSM.Status"
+                          "Variable": "$.ConnectCalicocloud.Status"
                         }
                       ],
-                      "Default": "Fail",
+                      "Default": "ConnectCalicocloudPass",
                       "Type": "Choice"
+                    },
+                    "ConnectCalicocloudPass": {
+                      "Type": "Pass",
+                      "Next": "SNS Publish Fail",
+                      "Parameters": {
+                        "Cause.$": "States.Format('SSM command to connect eks cluster to Calico cloud failed. SSM commandId {}', $.ConnectCalicocloud.CommandId)"
+                      },
+                      "ResultPath": "$.Error"
                     },
                     "ConnectCalicocloudStatus": {
                       "Next": "ConnectCalicocloudChoice",
                       "Parameters": {
-                        "CommandId.$": "$.ConnectCalicocloudSSM.CommandId",
-                        "InstanceId.$": "$.ConnectCalicocloudSSM.InstanceId"
+                        "CommandId.$": "$.ConnectCalicocloud.CommandId",
+                        "InstanceId.$": "$.ConnectCalicocloud.InstanceId"
                       },
                       "Resource": "arn:aws:states:::aws-sdk:ssm:listCommandInvocations",
-                      "ResultPath": "$.ConnectCalicocloudSSM",
+                      "ResultPath": "$.ConnectCalicocloud",
                       "ResultSelector": {
                         "CommandId.$": "$.CommandInvocations[0].CommandId",
                         "InstanceId.$": "$.CommandInvocations[0].InstanceId",
                         "Status.$": "$.CommandInvocations[0].Status"
                       },
-                      "Type": "Task"
+                      "Type": "Task",
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "SNS Publish Fail",
+                          "ResultPath": "$.Error"
+                        }
+                      ]
                     },
                     "ConnectCalicocloudWait": {
                       "Next": "ConnectCalicocloudStatus",
@@ -581,13 +757,42 @@ Resources:
                           "Variable": "$.ClusterDetails.Status"
                         }
                       ],
-                      "Default": "Fail",
+                      "Default": "EKSClusterPass",
                       "Type": "Choice"
                     },
                     "Wait5Min": {
                       "Next": "DescribeUpdatedCluster",
                       "Seconds": 300,
                       "Type": "Wait"
+                    },
+                    "SNS Publish Success": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sns:publish",
+                      "Parameters": {
+                        "TopicArn.$": "$.NotificationTopicArn",
+                        "Message": {
+                          "ClusterName.$": "$.ClusterName",
+                          "Status": "Succeeded",
+                          "StatusMessage": "EKS cluster is successfully connected to Calico cloud"
+                        }
+                      },
+                      "Next": "Success",
+                      "ResultPath": null
+                    },
+                    "SNS Publish Fail": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sns:publish",
+                      "Parameters": {
+                        "TopicArn.$": "$.NotificationTopicArn",
+                        "Message": {
+                          "ClusterName.$": "$.ClusterName",
+                          "Status": "Failed",
+                          "Cause.$": "$.Error.Cause",
+                          "StatusMessage": "EKS cluster failed to connect to Calico cloud"
+                        }
+                      },
+                      "Next": "Fail",
+                      "ResultPath": null
                     }
                   }
                 }
@@ -632,6 +837,11 @@ Resources:
                           - 'eks:CreateNodegroup'
                           - 'ec2:DescribeSubnets'
                         Resource: '*'
+                      - Sid: PublishToSNS
+                        Effect: Allow
+                        Action:
+                          - 'sns:Publish'
+                        Resource: !Ref CalicocloudConnectionSNS
                       - Sid: NodeGroupRolePass
                         Effect: Allow
                         Action: 'iam:PassRole'
@@ -651,7 +861,12 @@ Resources:
                         Action:
                           - 'iam:GetRole'
                           - 'iam:ListAttachedRolePolicies'
-                        Resource: 'arn:aws:iam::056567786302:role/*'
+                        Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/*'
+                      - Sid: AWSServiceRoleForAmazonEKSNodegroup
+                        Effect: Allow
+                        Action:
+                          - 'iam:CreateServiceLinkedRole'
+                        Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/eks-nodegroup.amazonaws.com/AWSServiceRoleForAmazonEKSNodegroup'
                       - Sid: CloudWatchLogging
                         Effect: Allow
                         Action:
@@ -729,9 +944,37 @@ Resources:
                           "NodeGroupInstanceTypes": ["${NodeGroupInstanceType}"],
                           "NodeGroupSize": ${NodeGroupSize},
                           "CalicocloudKubeAdminRoleArn":"${CalicocloudKubeAdminRoleArn}",
-                          "CalicocloudScriptUrl": "${CalicocloudScriptUrl}"
+                          "CalicocloudScriptUrl": "${CalicocloudScriptUrl}",
+                          "NotificationTopicArn": "${CalicocloudConnectionSNS}"
                         }
                       - CalicocloudKubeAdminRoleArn: !GetAtt CalicocloudKubeAdminRole.Arn
+          CalicocloudConnectionSNS:
+            Type: 'AWS::SNS::Topic'
+            Properties:
+              DisplayName: CalicocloudConnectionNotification
+              TopicName: CalicocloudConnectionNotification
+          CalicocloudConnectionSNSPolicy:
+            Type: 'AWS::SNS::TopicPolicy'
+            Properties:
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                  - Sid: TrustCalicoStateMachineToPublish
+                    Effect: Allow
+                    Principal:
+                      AWS: !GetAtt StateMachineRole.Arn
+                    Action:
+                      - 'sns:Publish'
+                    Resource: !Ref CalicocloudConnectionSNS
+              Topics:
+                - !Ref CalicocloudConnectionSNS
+          CalicocloudConnectionSNSSubscription:
+            Condition: CreateSNSSubscription
+            Type: AWS::SNS::Subscription
+            Properties:
+              Endpoint: !Ref NotificationEmailAddress
+              Protocol: email
+              TopicArn: !Ref CalicocloudConnectionSNS
         Outputs:
           CalicocloudKubeAdminRoleArn:
             Description: Kube admin role arn for calicocloud
@@ -755,3 +998,5 @@ Resources:
           ParameterValue: !Ref EventFilterTagKey
         - ParameterKey: EventFilterTagValue
           ParameterValue: !Ref EventFilterTagValue
+        - ParameterKey: NotificationEmailAddress
+          ParameterValue: !Ref NotificationEmailAddress

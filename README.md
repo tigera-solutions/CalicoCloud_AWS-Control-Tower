@@ -37,6 +37,8 @@ This is the IAM role role that needs to be updated in aws-auth configmap of kube
 An event rule is created to capture EKS CreateCluster event. This rule then triggers the state machine to initiate the automation.
 #### State machine   
 This state machine will orchestrate the automation of connecting eks cluster to calico cloud. As part of this automation, a node group is added to EKS cluster as pods will be deployed. Then it uses AWS Systems Manager to run command on eks nodes to run the calico script.
+#### Notification SNS topic   
+A SNS topic is created where state machine will send a success or failure notification of calico cloud connection. Options to subscribe to one email address is available via parameters. Subscription can be added as needed after deployment as well.
 
 ## CloudFormation Parameters
 * **CalicocloudKubeAdminRoleName**   
@@ -65,3 +67,6 @@ Tag key name to filter event for EKS cluster creation.
 
 * **EventFilterTagValue**
 Tag key value to filter event for EKS cluster creation.
+
+* **NotificationEmailAddress**
+This an optional parameter. If an email address is provided then a SNS subscription is created for state machine execution status.
